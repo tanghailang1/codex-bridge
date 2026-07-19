@@ -1,0 +1,7 @@
+/target/
+/.test-codex-home/
+*.dylib
+*.so
+*.dll
+*.a
+*.lib
