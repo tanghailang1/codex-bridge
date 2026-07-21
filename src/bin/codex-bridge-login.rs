@@ -2,11 +2,12 @@ use codex_bridge::LoginConfig;
 use codex_bridge::export_credentials;
 use codex_bridge::start_login;
 use serde_json::json;
+use std::io::Write;
 use std::path::PathBuf;
 
 fn usage() -> ! {
     eprintln!(
-        "Usage:\n  codex-bridge-login login [--codex-home PATH] [--no-open-browser] [--port PORT]\n  codex-bridge-login credentials [--codex-home PATH] [--show-secrets]\n\nLogin uses the ChatGPT browser OAuth flow from the vendored Codex CLI source."
+        "Usage:\n  codex-bridge-login login [--codex-home PATH] [--no-open-browser] [--port PORT]\n  codex-bridge-login login-json [--codex-home PATH] [--no-open-browser] [--port PORT]\n  codex-bridge-login credentials [--codex-home PATH] [--show-secrets]\n  codex-bridge-login models [--codex-home PATH]\n\nLogin uses the ChatGPT browser OAuth flow from the vendored Codex CLI source. login-json emits one NDJSON event when login starts and another when it completes. models prints the picker catalog available to the stored credential."
     );
     std::process::exit(2);
 }
@@ -56,12 +57,55 @@ fn main() {
             let credentials = session.wait().unwrap_or_else(|error| fatal(error));
             print_credentials(&credentials, show_secrets);
         }
+        "login-json" => login_json(config).unwrap_or_else(|error| fatal(error)),
+        "models" => {
+            let auth = std::fs::read(config.codex_home.join("auth.json"))
+                .unwrap_or_else(|error| fatal(error));
+            let models =
+                codex_bridge::list_models(&auth).unwrap_or_else(|error| fatal(error));
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&models).expect("serialize models")
+            );
+        }
         "credentials" => {
             let credentials = export_credentials(&config).unwrap_or_else(|error| fatal(error));
             print_credentials(&credentials, show_secrets);
         }
         _ => usage(),
     }
+}
+
+fn login_json(config: LoginConfig) -> Result<(), codex_bridge::BridgeError> {
+    let session = start_login(config)?;
+    print_json_event(&json!({
+        "type": "login.started",
+        "login": session.start_info(),
+        "codex_commit": codex_bridge::CODEX_COMMIT,
+    }));
+
+    let credentials = session.wait()?;
+    let tokens = credentials.auth.tokens.as_ref();
+    print_json_event(&json!({
+        "type": "login.completed",
+        "account": {
+            "email": tokens.and_then(|tokens| tokens.id_token.email.clone()),
+            "account_id": tokens.and_then(|tokens| tokens.account_id.clone())
+                .or_else(|| tokens.and_then(|tokens| tokens.id_token.chatgpt_account_id.clone())),
+            "chatgpt_user_id": tokens.and_then(|tokens| tokens.id_token.chatgpt_user_id.clone()),
+            "plan_type": tokens.and_then(|tokens| tokens.id_token.get_chatgpt_plan_type_raw()),
+        },
+        "credentials": credentials,
+    }));
+    Ok(())
+}
+
+fn print_json_event(value: &serde_json::Value) {
+    let stdout = std::io::stdout();
+    let mut stdout = stdout.lock();
+    serde_json::to_writer(&mut stdout, value).expect("serialize login event");
+    stdout.write_all(b"\n").expect("write login event");
+    stdout.flush().expect("flush login event");
 }
 
 fn print_credentials(credentials: &codex_bridge::CredentialExport, show_secrets: bool) {

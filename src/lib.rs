@@ -6,6 +6,10 @@
 mod config;
 mod error;
 mod login;
+mod models;
+mod refresh;
+mod status;
+mod template;
 
 pub mod ffi;
 
@@ -17,6 +21,10 @@ pub use login::LoginStartInfo;
 pub use login::export_credentials;
 pub use login::login_blocking;
 pub use login::start_login;
+pub use models::list_models;
+pub use refresh::refresh_credentials;
+pub use status::query_account_status;
+pub use template::responses_request_schema;
 
 /// ABI version of the exported C interface.
 pub const ABI_VERSION: u32 = 1;

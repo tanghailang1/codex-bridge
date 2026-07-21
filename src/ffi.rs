@@ -5,6 +5,10 @@ use crate::BridgeError;
 use crate::LoginConfig;
 use crate::LoginSession;
 use crate::export_credentials;
+use crate::list_models;
+use crate::query_account_status;
+use crate::refresh_credentials;
+use crate::responses_request_schema;
 use crate::start_login;
 use std::cell::RefCell;
 use std::ffi::CStr;
@@ -55,6 +59,21 @@ unsafe fn config_from_parts(data: *const u8, len: usize) -> Result<LoginConfig, 
     // SAFETY: validated non-null above; caller promises the region is readable for len bytes.
     let bytes = unsafe { std::slice::from_raw_parts(data, len) };
     LoginConfig::from_json(bytes).map_err(BridgeError::InvalidConfig)
+}
+
+unsafe fn bytes_from_parts<'a>(
+    data: *const u8,
+    len: usize,
+    name: &'static str,
+) -> Result<&'a [u8], BridgeError> {
+    if data.is_null() {
+        if len == 0 {
+            return Ok(&[]);
+        }
+        return Err(BridgeError::InvalidArgument(name));
+    }
+    // SAFETY: the caller promises the region is readable for len bytes.
+    Ok(unsafe { std::slice::from_raw_parts(data, len) })
 }
 
 fn write_json<T: serde::Serialize>(value: &T, output: *mut *mut c_char) -> Result<(), BridgeError> {
@@ -153,6 +172,74 @@ pub unsafe extern "C" fn codex_bridge_login_credentials(
         let config = unsafe { config_from_parts(config_json, config_len)? };
         let credentials = export_credentials(&config)?;
         write_json(&credentials, out_credentials_json)
+    })
+}
+
+/// Query current account usage and rate-limit details using a serialized `auth.json` payload.
+/// The returned JSON is owned by the caller and must be released with string_free.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn codex_bridge_status_query(
+    auth_json: *const u8,
+    auth_len: usize,
+    base_url: *const u8,
+    base_url_len: usize,
+    out_status_json: *mut *mut c_char,
+) -> i32 {
+    ffi_call(|| {
+        let auth = unsafe { bytes_from_parts(auth_json, auth_len, "auth JSON is null")? };
+        let base_url = unsafe { bytes_from_parts(base_url, base_url_len, "base URL is null")? };
+        let base_url = if base_url.is_empty() {
+            None
+        } else {
+            Some(
+                std::str::from_utf8(base_url)
+                    .map_err(|_| BridgeError::InvalidArgument("base URL is not UTF-8"))?,
+            )
+        };
+        let status = query_account_status(auth, base_url).map_err(BridgeError::Status)?;
+        write_json(&status, out_status_json)
+    })
+}
+
+/// Return the JSON Schema for the Codex Responses request body, with `default` values for the
+/// baseline fields Codex fills in. Static metadata: takes no credentials, makes no network call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn codex_bridge_responses_schema(out_schema_json: *mut *mut c_char) -> i32 {
+    ffi_call(|| write_json(&responses_request_schema(), out_schema_json))
+}
+
+/// List the models available to one stored credential, mirroring the CLI `/model` picker.
+///
+/// The returned JSON is `{"models": [...]}`; each entry carries its own supported reasoning
+/// efforts and service tiers (the CLI's 推理强度 / 速度 menus).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn codex_bridge_models_list(
+    auth_json: *const u8,
+    auth_len: usize,
+    out_models_json: *mut *mut c_char,
+) -> i32 {
+    ffi_call(|| {
+        let auth = unsafe { bytes_from_parts(auth_json, auth_len, "auth JSON is null")? };
+        let models = list_models(auth)?;
+        write_json(&models, out_models_json)
+    })
+}
+
+/// Refresh one stored `auth.json` payload and return the outcome as JSON.
+///
+/// The call returns OK for both successful and failed refreshes; inspect the returned JSON
+/// (`refreshed` / `permanent` / `message` / `auth`) to decide whether a new login is required.
+/// Only malformed arguments produce a non-zero return code.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn codex_bridge_token_refresh(
+    auth_json: *const u8,
+    auth_len: usize,
+    out_result_json: *mut *mut c_char,
+) -> i32 {
+    ffi_call(|| {
+        let auth = unsafe { bytes_from_parts(auth_json, auth_len, "auth JSON is null")? };
+        let result = refresh_credentials(auth)?;
+        write_json(&result, out_result_json)
     })
 }
 

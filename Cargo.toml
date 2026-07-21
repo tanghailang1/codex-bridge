@@ -19,14 +19,17 @@ members = ["http-bridge"]
 exclude = ["upstream/codex"]
 
 [dependencies]
+codex-http-client = { path = "upstream/codex/codex-rs/http-client" }
 codex-login = { path = "upstream/codex/codex-rs/login" }
+codex-model-provider = { path = "upstream/codex/codex-rs/model-provider" }
+codex-model-provider-info = { path = "upstream/codex/codex-rs/model-provider-info" }
+codex-models-manager = { path = "upstream/codex/codex-rs/models-manager" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
-
-[dev-dependencies]
-tempfile = "3"
 
 # Path dependencies inherit their package metadata from the Codex workspace, but Cargo applies
 # source patches only from this bridge workspace root. Keep these aligned with upstream/codex-

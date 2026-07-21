@@ -14,4 +14,6 @@ pub enum BridgeError {
     NoCredentials,
     #[error("invalid FFI argument: {0}")]
     InvalidArgument(&'static str),
+    #[error("account status query failed: {0}")]
+    Status(String),
 }

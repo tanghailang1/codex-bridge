@@ -4,10 +4,20 @@
 
 本仓库是 Codex CLI 的独立 Bridge 项目，通过 Git submodule 引用官方 Codex
 源码，将可复用能力封装成稳定的 Rust API、C ABI、动态库和可直接运行的测试程序。
-目前包含两个相互独立的能力：
 
-1. ChatGPT 浏览器 OAuth 登录和凭证导出。
-2. 使用 ChatGPT 凭证调用 Codex Responses HTTP/SSE 协议。
+分成两个相互独立、可单独分发的库：
+
+**`libcodex_bridge`（登录库，`src/`）** —— 账号与元数据：
+
+1. ChatGPT 浏览器 OAuth 登录和凭证导出（`login.rs`）。
+2. 账号额度 / 限流查询（`status.rs`，`/wham/usage`）。
+3. `access_token` 刷新（`refresh.rs`，复用上游 `AuthManager`，会轮换并持久化 refresh_token）。
+4. 可用模型目录（`models.rs`，等价 CLI 的 `/model`：按 priority 排序、按登录态过滤）。
+5. Codex Responses 请求体的 JSON Schema（`template.rs`，各基线字段带 `default`，静态元数据无需凭证）。
+
+**`libcodex_http_bridge`（HTTP 库，`http-bridge/`）** —— 使用 ChatGPT 凭证调用 Codex Responses HTTP/SSE 协议。
+
+两个库运行时的唯一交界是 Codex 格式的 `auth.json`；HTTP 库不链接登录库。
 
 项目根目录：
 
@@ -62,16 +72,24 @@ codex-bridge/
 源码：
 
 ```text
-src/config.rs
-src/error.rs
-src/login.rs
-src/ffi.rs
+src/config.rs       登录配置(codex_home/端口/issuer/凭证存储后端)
+src/login.rs        浏览器 OAuth 流程(复用上游 codex-login)
+src/status.rs       额度/限流查询
+src/refresh.rs      access_token 刷新
+src/models.rs       可用模型目录(/model)
+src/template.rs     Responses 请求体 JSON Schema
+src/error.rs        BridgeError
+src/ffi.rs          稳定 C ABI
 src/lib.rs
-src/bin/codex-bridge-login.rs
+src/bin/codex-bridge-login.rs   命令行测试程序
 ```
 
-直接复用上游 `codex-login` 的 ChatGPT browser OAuth 流程，包括本地 callback
+`login.rs` 直接复用上游 `codex-login` 的 ChatGPT browser OAuth 流程，包括本地 callback
 server、浏览器登录、凭证持久化和凭证导出。
+
+`refresh.rs` / `models.rs` 采用「凭证 → 临时 Codex home → 复用上游逻辑 → 读回结果」的方式：
+调用方把凭证存在自己的数据库里而不是 Codex home，所以先把 `auth.json` 落到临时目录交给上游
+`AuthManager` / models manager，再读回结果，既不重复实现刷新/目录语义，也不污染宿主的 Codex 配置。
 
 产物：
 
@@ -89,6 +107,39 @@ target/release/codex-bridge-login login \
 
 target/release/codex-bridge-login credentials \
   --codex-home "$PWD/.test-codex-home"
+```
+
+代理进程推荐直接使用 `include/codex_bridge.h` 和 `libcodex_bridge` 动态库。登录 ABI
+返回 opaque session，登录完成后返回完整鉴权 JSON。
+
+登录库当前导出的 C ABI（返回码 `0 OK / 1 ERROR / 2 PANIC`）：
+
+- `codex_bridge_login_start` / `_wait` / `_cancel`：浏览器登录三步。
+- `codex_bridge_login_credentials`：读已持久化的凭证，不发起新登录。
+- `codex_bridge_status_query`：用 `auth.json` 查 `/wham/usage` 和 reset credit 详情。
+- `codex_bridge_token_refresh`：刷新 `access_token`。**成功与失败都返回 OK**，结果在 JSON 里区分：
+  `{"refreshed":true,"permanent":false,"auth":{...}}` 表示成功并回传轮换后的完整 `auth.json`；
+  `{"refreshed":false,"permanent":true,"message":"..."}` 表示 refresh token 已失效，**必须重新登录**。
+- `codex_bridge_models_list`：列出该账号可用模型（每个模型自带推理强度 `supported_reasoning_efforts`
+  与速度档位 `service_tiers`），等价 CLI 的 `/model`，目录按账号套餐过滤。
+- `codex_bridge_responses_schema`：返回 Codex Responses 请求体的 JSON Schema，每个基线字段带
+  `default`（`store:false`、`stream:true`、`include` 等）。**静态元数据，无需凭证、不发网络请求**，
+  供代理补齐原生 SDK 请求缺失的字段。
+- `codex_bridge_codex_commit`：编译时的上游 commit。
+- `codex_bridge_login_session_free` / `_string_free`：释放 session / 返回的字符串。
+
+旧的进程集成测试仍可使用 `login-json`。它先输出 `login.started` NDJSON 事件，浏览器回调
+完成后再输出包含账号摘要和完整鉴权内容的 `login.completed` 事件：
+
+```bash
+target/release/codex-bridge-login login-json \
+  --codex-home "$PWD/.test-codex-home" --no-open-browser --port 0
+```
+
+列出该账号可用模型 / 推理强度 / 速度档位：
+
+```bash
+target/release/codex-bridge-login models --codex-home "$PWD/.test-codex-home"
 ```
 
 `.test-codex-home/auth.json` 是本地敏感凭证，已被 `.gitignore` 忽略。不要将其内容、
