@@ -45,7 +45,7 @@ pub fn list_models(auth_json: &[u8]) -> Result<Value, BridgeError> {
                 /*forced_chatgpt_workspace_id*/ None,
                 /*chatgpt_base_url*/ None,
                 AuthKeyringBackendKind::default(),
-                /*auth_route_config*/ None,
+                /*auth_route_config*/ crate::default_auth_route_config(),
             )
             .await,
         );

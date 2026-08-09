@@ -73,7 +73,7 @@ pub fn start_login(config: LoginConfig) -> Result<LoginSession, BridgeError> {
             &config.codex_home,
             config.credentials_store_mode,
             config.keyring_backend_kind,
-            None,
+            &crate::default_auth_route_config(),
         ));
         if let Err(error) = result {
             // Match Codex CLI behavior: failure to revoke old credentials must not prevent login.
@@ -87,7 +87,7 @@ pub fn start_login(config: LoginConfig) -> Result<LoginSession, BridgeError> {
         config.forced_chatgpt_workspace_id.clone(),
         config.credentials_store_mode,
         config.keyring_backend_kind,
-        None,
+        crate::default_auth_route_config(),
     );
     options.open_browser = config.open_browser;
     options.port = config.port;
