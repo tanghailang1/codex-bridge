@@ -60,6 +60,12 @@ pub fn refresh_credentials(auth_json: &[u8]) -> Result<Value, BridgeError> {
                 "message": failed.to_string(),
                 "auth": Value::Null,
             })),
+            Err(RefreshTokenError::Policy(error)) => Ok(json!({
+                "refreshed": false,
+                "permanent": true,
+                "message": error.to_string(),
+                "auth": Value::Null,
+            })),
             Err(RefreshTokenError::Transient(error)) => Ok(json!({
                 "refreshed": false,
                 "permanent": false,
